@@ -27,18 +27,24 @@ if DEVICE == "cuda":
     logger.info(f"Available GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
 
 # Specify the LLM model to use - Mistral 7B Instruct
-MODEL_NAME = "facebook/opt-350m"  # Smaller, open-access model
+MODEL_NAME = "facebook/opt-1.3b"  # Larger model with better capabilities
 model = None
 tokenizer = None
 memory = ConversationBufferMemory()  # Store conversation history
 
-# Create a simple prompt template for LangChain
-template = """The following is a friendly conversation between a human and an AI. The AI is helpful, creative, clever, and very friendly.
+# Create a more detailed prompt template for LangChain
+template = """You are a helpful, accurate, and knowledgeable AI assistant. Your responses should be:
+- Factual and based on reliable information
+- Clear and well-structured
+- Concise but comprehensive
+- Professional and respectful
+
+When you don't know something, admit it rather than making up information.
 
 Current conversation:
 {history}
 Human: {input}
-AI:"""
+AI: Let me help you with that. """
 
 prompt = PromptTemplate(
     input_variables=["history", "input"],
@@ -117,27 +123,54 @@ def extract_ai_response(full_response: str) -> str:
 def generate_response(prompt_text: str) -> str:
     try:
         logger.info(f"Generating response for prompt: {prompt_text[:50]}...")
-        inputs = tokenizer(prompt_text, return_tensors="pt").to(DEVICE)
         
-        # Optimize generation parameters for faster responses
+        # Add a system instruction to guide the model
+        system_instruction = "You are a helpful AI assistant. Provide complete, accurate, and helpful responses."
+        enhanced_prompt = f"{system_instruction}\n\n{prompt_text}"
+        
+        inputs = tokenizer(enhanced_prompt, return_tensors="pt").to(DEVICE)
+        
+        # Optimize generation parameters for more accurate responses
         outputs = model.generate(
             **inputs,
-            max_length=256,  # Reduced from 512
+            max_length=512,  # Increased for more complete responses
             num_return_sequences=1,
-            temperature=0.7,
+            temperature=0.7,  # Balanced temperature
             do_sample=True,
             pad_token_id=tokenizer.eos_token_id,
-            top_p=0.9,  # Add top_p sampling
-            top_k=50,   # Add top_k sampling
-            repetition_penalty=1.2,  # Add repetition penalty
+            top_p=0.9,  # Higher top_p for more diverse responses
+            top_k=50,   # Higher top_k for more vocabulary options
+            repetition_penalty=1.2,  # Moderate repetition penalty
             no_repeat_ngram_size=3,  # Prevent repetition of 3-grams
-            early_stopping=True  # Enable early stopping
+            early_stopping=True,  # Enable early stopping
+            length_penalty=1.0  # Balanced length penalty
         )
         
         full_response = tokenizer.decode(outputs[0], skip_special_tokens=True)
         
         # Extract just the AI's response part
         response = extract_ai_response(full_response)
+        
+        # Ensure the response is complete
+        if response.endswith("...") or len(response) < 10:
+            # If the response seems incomplete, try again with different parameters
+            outputs = model.generate(
+                **inputs,
+                max_length=768,  # Even longer for completeness
+                num_return_sequences=1,
+                temperature=0.8,  # Slightly higher temperature
+                do_sample=True,
+                pad_token_id=tokenizer.eos_token_id,
+                top_p=0.95,
+                top_k=100,
+                repetition_penalty=1.1,
+                no_repeat_ngram_size=2,
+                early_stopping=True,
+                length_penalty=1.2  # Favor longer responses
+            )
+            full_response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            response = extract_ai_response(full_response)
+        
         logger.info(f"Generated response: {response[:50]}...")
         return response
     except Exception as e:
